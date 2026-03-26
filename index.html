@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="https://unpkg.com/@zxing/browser@0.1.5/umd/index.min.js"></script>
+<script src="https://unpkg.com/@zxing/library@latest"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
   :root{
@@ -725,39 +725,34 @@ async function eliminarMovimiento(id){
   await abrirObjeto(currentObjetoId);
 }
 
-// ─── SCANNER (ZXing Browser — QR + DataMatrix + Barcodes) ───
+// ─── SCANNER (ZXing library — QR + DataMatrix + Barcodes) ───
 let zxingCodeReader=null;
 
-async function abrirScanner(mode){
+function abrirScanner(mode){
   scannerMode=mode;
   document.getElementById('scanner-overlay').style.display='flex';
   try{
-    zxingCodeReader=new ZXingBrowser.BrowserMultiFormatReader();
+    zxingCodeReader=new ZXing.BrowserMultiFormatReader();
     const videoEl=document.getElementById('scanner-video');
-    // Obtener lista de cámaras y preferir trasera
-    const devices=await ZXingBrowser.BrowserMultiFormatReader.listVideoInputDevices();
-    const backCam=devices.find(d=>/(back|rear|environment|trasera|posterior)/i.test(d.label))||devices[devices.length-1]||devices[0];
-    const deviceId=backCam?backCam.deviceId:undefined;
-    await zxingCodeReader.decodeFromVideoDevice(deviceId,videoEl,(result,err)=>{
+    zxingCodeReader.decodeFromVideoDevice(undefined,videoEl,(result,err)=>{
       if(result){
         if(navigator.vibrate)navigator.vibrate(100);
         cerrarScanner();
-        manejarCodigoEscaneado(result.getText());
+        manejarCodigoEscaneado(result.text);
       }
-      // err es normal cuando no hay código en el frame
+      if(err&&!(err instanceof ZXing.NotFoundException)){
+        console.error('ZXing err:',err);
+      }
     });
   }catch(err){
     cerrarScanner();
-    if(err.name==='NotAllowedError')alert('Permiso de cámara denegado. Actívalo en la configuración del navegador.');
-    else alert('No se pudo acceder a la cámara: '+err.message);
+    if(err.name==='NotAllowedError')alert('Permiso de cámara denegado. Actívalo en ajustes del navegador.');
+    else alert('No se pudo abrir la cámara: '+err.message);
   }
 }
 
 function cerrarScanner(){
-  if(zxingCodeReader){
-    try{zxingCodeReader.reset();}catch(e){}
-    zxingCodeReader=null;
-  }
+  if(zxingCodeReader){try{zxingCodeReader.reset();}catch(e){} zxingCodeReader=null;}
   clearInterval(scannerInterval);
   if(scannerStream)scannerStream.getTracks().forEach(t=>t.stop());
   scannerStream=null;
