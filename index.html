@@ -158,12 +158,20 @@
 
   /* SCANNER */
   #scanner-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:300;flex-direction:column;align-items:center;justify-content:center;padding:1.5rem;}
-  #html5qr-reader{border-radius:16px;overflow:hidden;}
-  #html5qr-reader video{border-radius:12px;}
-  .scanner-hint{color:rgba(255,255,255,0.75);font-size:0.85rem;margin-top:1rem;text-align:center;}
-  .scanner-formats{display:flex;gap:0.5rem;margin-top:0.6rem;flex-wrap:wrap;justify-content:center;}
+  .scanner-frame{position:relative;width:100%;max-width:380px;border-radius:16px;overflow:hidden;box-shadow:0 0 0 4px rgba(116,198,157,0.4);}
+  #scanner-video{width:100%;display:block;border-radius:16px;}
+  #scanner-canvas{display:none;}
+  .scanner-line{position:absolute;left:5%;right:5%;height:2px;background:linear-gradient(90deg,transparent,var(--gl),transparent);animation:scan 2s linear infinite;top:10%;}
+  @keyframes scan{0%{top:10%;}100%{top:90%;}}
+  .scanner-corners::before,.scanner-corners::after{content:'';position:absolute;width:24px;height:24px;border-color:var(--gl);border-style:solid;}
+  .scanner-corners::before{top:8px;left:8px;border-width:3px 0 0 3px;border-radius:4px 0 0 0;}
+  .scanner-corners::after{bottom:8px;right:8px;border-width:0 3px 3px 0;border-radius:0 0 4px 0;}
+  .scanner-corner-tr{position:absolute;top:8px;right:8px;width:24px;height:24px;border-top:3px solid var(--gl);border-right:3px solid var(--gl);border-radius:0 4px 0 0;}
+  .scanner-corner-bl{position:absolute;bottom:8px;left:8px;width:24px;height:24px;border-bottom:3px solid var(--gl);border-left:3px solid var(--gl);border-radius:0 0 0 4px;}
+  .scanner-hint{color:rgba(255,255,255,0.75);font-size:0.85rem;margin-top:1.25rem;text-align:center;line-height:1.5;}
+  .scanner-formats{display:flex;gap:0.5rem;margin-top:0.75rem;flex-wrap:wrap;justify-content:center;}
   .scanner-formats span{background:rgba(116,198,157,0.15);border:1px solid rgba(116,198,157,0.3);color:var(--gl);padding:0.2rem 0.6rem;border-radius:20px;font-size:0.72rem;font-weight:600;}
-  .btn-cancel-scan{margin-top:1rem;padding:0.75rem 2rem;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.25);color:white;border-radius:50px;font-family:'Inter',sans-serif;font-size:0.9rem;cursor:pointer;}
+  .btn-cancel-scan{margin-top:1.25rem;padding:0.75rem 2rem;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.25);color:white;border-radius:50px;font-family:'Inter',sans-serif;font-size:0.9rem;cursor:pointer;transition:background 0.2s;}
   .btn-cancel-scan:hover{background:rgba(255,255,255,0.15);}
 
   /* MOVIMIENTO BUTTONS */
@@ -362,7 +370,13 @@
 
   <!-- SCANNER OVERLAY -->
   <div id="scanner-overlay">
-    <div id="html5qr-reader" style="width:100%;max-width:380px;border-radius:16px;overflow:hidden;"></div>
+    <div class="scanner-frame scanner-corners">
+      <video id="scanner-video" autoplay playsinline muted></video>
+      <canvas id="scanner-canvas"></canvas>
+      <div class="scanner-line"></div>
+      <div class="scanner-corner-tr"></div>
+      <div class="scanner-corner-bl"></div>
+    </div>
     <div class="scanner-hint">Apunta la cámara al código</div>
     <div class="scanner-formats">
       <span>📦 DataMatrix</span>
@@ -438,7 +452,7 @@ const SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZ
 
 let sb=null,currentFincaId=null,currentRol=null,currentUserEmail=null;
 let dbObjetos=[],granularidad='mes',chartMov=null;
-let currentObjetoId=null,scannerMode=null;
+let currentObjetoId=null,scannerMode=null,scannerStream=null,scannerInterval=null;
 
 function initSB(){if(!sb)sb=window.supabase.createClient(SB_URL,SB_KEY);}
 
@@ -725,16 +739,16 @@ async function eliminarMovimiento(id){
   await abrirObjeto(currentObjetoId);
 }
 
-// ─── SCANNER (ZXing library — QR + DataMatrix + Barcodes) ───
-let zxingCodeReader=null;
+// ─── SCANNER (ZXing — QR + DataMatrix + Barcodes) ───
+let zxingReader=null;
 
 function abrirScanner(mode){
   scannerMode=mode;
   document.getElementById('scanner-overlay').style.display='flex';
   try{
-    zxingCodeReader=new ZXing.BrowserMultiFormatReader();
-    const videoEl=document.getElementById('scanner-video');
-    zxingCodeReader.decodeFromVideoDevice(undefined,videoEl,(result,err)=>{
+    zxingReader=new ZXing.BrowserMultiFormatReader();
+    const video=document.getElementById('scanner-video');
+    zxingReader.decodeFromVideoDevice(undefined,video,(result,err)=>{
       if(result){
         if(navigator.vibrate)navigator.vibrate(100);
         cerrarScanner();
@@ -746,13 +760,13 @@ function abrirScanner(mode){
     });
   }catch(err){
     cerrarScanner();
-    if(err.name==='NotAllowedError')alert('Permiso de cámara denegado. Actívalo en ajustes del navegador.');
-    else alert('No se pudo abrir la cámara: '+err.message);
+    if(err.name==='NotAllowedError')alert('Permiso de cámara denegado. Actívalo en la configuración del navegador.');
+    else alert('No se pudo acceder a la cámara: '+err.message);
   }
 }
 
 function cerrarScanner(){
-  if(zxingCodeReader){try{zxingCodeReader.reset();}catch(e){} zxingCodeReader=null;}
+  if(zxingReader){try{zxingReader.reset();}catch(e){} zxingReader=null;}
   clearInterval(scannerInterval);
   if(scannerStream)scannerStream.getTracks().forEach(t=>t.stop());
   scannerStream=null;
