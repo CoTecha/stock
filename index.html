@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
   :root{
@@ -157,13 +157,22 @@
   .modal-close{background:none;border:none;font-size:1.5rem;cursor:pointer;color:var(--tm);}
 
   /* SCANNER */
-  #scanner-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:300;flex-direction:column;align-items:center;justify-content:center;}
-  #scanner-overlay video{width:100%;max-width:400px;border-radius:12px;}
-  #scanner-overlay canvas{display:none;}
-  .scanner-frame{position:relative;width:100%;max-width:400px;margin-bottom:1rem;}
-  .scanner-frame::after{content:'';position:absolute;inset:10%;border:2px solid var(--gl);border-radius:8px;pointer-events:none;}
-  .scanner-hint{color:rgba(255,255,255,0.7);font-size:0.88rem;margin-top:1rem;text-align:center;}
-  .btn-cancel-scan{margin-top:1.5rem;padding:0.75rem 2rem;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.3);color:white;border-radius:50px;font-family:'Inter',sans-serif;font-size:0.9rem;cursor:pointer;}
+  #scanner-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:300;flex-direction:column;align-items:center;justify-content:center;padding:1.5rem;}
+  .scanner-frame{position:relative;width:100%;max-width:380px;border-radius:16px;overflow:hidden;box-shadow:0 0 0 4px rgba(116,198,157,0.4);}
+  #scanner-video{width:100%;display:block;border-radius:16px;}
+  #scanner-canvas{display:none;}
+  .scanner-line{position:absolute;left:5%;right:5%;height:2px;background:linear-gradient(90deg,transparent,var(--gl),transparent);animation:scan 2s linear infinite;top:10%;}
+  @keyframes scan{0%{top:10%;}100%{top:90%;}}
+  .scanner-corners::before,.scanner-corners::after{content:'';position:absolute;width:24px;height:24px;border-color:var(--gl);border-style:solid;}
+  .scanner-corners::before{top:8px;left:8px;border-width:3px 0 0 3px;border-radius:4px 0 0 0;}
+  .scanner-corners::after{bottom:8px;right:8px;border-width:0 3px 3px 0;border-radius:0 0 4px 0;}
+  .scanner-corner-tr{position:absolute;top:8px;right:8px;width:24px;height:24px;border-top:3px solid var(--gl);border-right:3px solid var(--gl);border-radius:0 4px 0 0;}
+  .scanner-corner-bl{position:absolute;bottom:8px;left:8px;width:24px;height:24px;border-bottom:3px solid var(--gl);border-left:3px solid var(--gl);border-radius:0 0 0 4px;}
+  .scanner-hint{color:rgba(255,255,255,0.75);font-size:0.85rem;margin-top:1.25rem;text-align:center;line-height:1.5;}
+  .scanner-formats{display:flex;gap:0.5rem;margin-top:0.75rem;flex-wrap:wrap;justify-content:center;}
+  .scanner-formats span{background:rgba(116,198,157,0.15);border:1px solid rgba(116,198,157,0.3);color:var(--gl);padding:0.2rem 0.6rem;border-radius:20px;font-size:0.72rem;font-weight:600;}
+  .btn-cancel-scan{margin-top:1.25rem;padding:0.75rem 2rem;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.25);color:white;border-radius:50px;font-family:'Inter',sans-serif;font-size:0.9rem;cursor:pointer;transition:background 0.2s;}
+  .btn-cancel-scan:hover{background:rgba(255,255,255,0.15);}
 
   /* MOVIMIENTO BUTTONS */
   .mov-btns{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.75rem;margin-bottom:1.5rem;}
@@ -361,12 +370,20 @@
 
   <!-- SCANNER OVERLAY -->
   <div id="scanner-overlay">
-    <div class="scanner-frame">
-      <video id="scanner-video" autoplay playsinline></video>
+    <div class="scanner-frame scanner-corners">
+      <video id="scanner-video" autoplay playsinline muted></video>
       <canvas id="scanner-canvas"></canvas>
+      <div class="scanner-line"></div>
+      <div class="scanner-corner-tr"></div>
+      <div class="scanner-corner-bl"></div>
     </div>
-    <div class="scanner-hint">Apunta la cámara al código DataMatrix o QR</div>
-    <button class="btn-cancel-scan" onclick="cerrarScanner()">Cancelar</button>
+    <div class="scanner-hint">Apunta la cámara al código</div>
+    <div class="scanner-formats">
+      <span>📦 DataMatrix</span>
+      <span>◻️ QR Code</span>
+      <span>▌▌ Barras</span>
+    </div>
+    <button class="btn-cancel-scan" onclick="cerrarScanner()">✕ Cancelar</button>
   </div>
 
   <!-- MODAL OBJETO -->
@@ -722,36 +739,73 @@ async function eliminarMovimiento(id){
   await abrirObjeto(currentObjetoId);
 }
 
-// ─── SCANNER ───
-function abrirScanner(mode){
+// ─── SCANNER (ZXing — QR + DataMatrix + Barcodes) ───
+let zxingReader=null;
+
+async function abrirScanner(mode){
   scannerMode=mode;
   document.getElementById('scanner-overlay').style.display='flex';
-  navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}}).then(stream=>{
-    scannerStream=stream;
+  try{
+    // Inicializar ZXing con todos los formatos
+    const hints=new Map();
+    const formats=[
+      ZXing.BarcodeFormat.QR_CODE,
+      ZXing.BarcodeFormat.DATA_MATRIX,
+      ZXing.BarcodeFormat.EAN_13,
+      ZXing.BarcodeFormat.EAN_8,
+      ZXing.BarcodeFormat.CODE_128,
+      ZXing.BarcodeFormat.CODE_39,
+      ZXing.BarcodeFormat.ITF,
+      ZXing.BarcodeFormat.UPC_A,
+      ZXing.BarcodeFormat.UPC_E,
+      ZXing.BarcodeFormat.AZTEC,
+      ZXing.BarcodeFormat.PDF_417
+    ];
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,formats);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
+    zxingReader=new ZXing.MultiFormatReader();
+    zxingReader.setHints(hints);
+
+    const constraints={video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}};
+    scannerStream=await navigator.mediaDevices.getUserMedia(constraints);
     const video=document.getElementById('scanner-video');
-    video.srcObject=stream;
-    video.play();
+    video.srcObject=scannerStream;
+    await video.play();
+
     const canvas=document.getElementById('scanner-canvas');
     scannerInterval=setInterval(()=>{
-      if(video.readyState===video.HAVE_ENOUGH_DATA){
-        canvas.width=video.videoWidth;canvas.height=video.videoHeight;
-        const ctx=canvas.getContext('2d');
-        ctx.drawImage(video,0,0,canvas.width,canvas.height);
-        const img=ctx.getImageData(0,0,canvas.width,canvas.height);
-        const code=jsQR(img.data,img.width,img.height,{inversionAttempts:'dontInvert'});
-        if(code){
+      if(video.readyState!==video.HAVE_ENOUGH_DATA)return;
+      try{
+        canvas.width=video.videoWidth;
+        canvas.height=video.videoHeight;
+        const ctx=canvas.getContext('2d',{willReadFrequently:true});
+        ctx.drawImage(video,0,0);
+        const imgData=ctx.getImageData(0,0,canvas.width,canvas.height);
+        const luminance=new ZXing.RGBLuminanceSource(imgData.data,canvas.width,canvas.height);
+        const binaryBitmap=new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(luminance));
+        const result=zxingReader.decode(binaryBitmap);
+        if(result){
+          // Vibrar si disponible
+          if(navigator.vibrate)navigator.vibrate(100);
           cerrarScanner();
-          manejarCodigoEscaneado(code.data);
+          manejarCodigoEscaneado(result.getText());
         }
+      }catch(e){
+        // NotFoundException es normal — no hay código en frame
       }
-    },200);
-  }).catch(()=>{cerrarScanner();alert('No se pudo acceder a la cámara.');});
+    },150);
+  }catch(err){
+    cerrarScanner();
+    if(err.name==='NotAllowedError')alert('Permiso de cámara denegado. Actívalo en la configuración del navegador.');
+    else alert('No se pudo acceder a la cámara: '+err.message);
+  }
 }
 
 function cerrarScanner(){
   clearInterval(scannerInterval);
   if(scannerStream)scannerStream.getTracks().forEach(t=>t.stop());
   scannerStream=null;
+  zxingReader=null;
   document.getElementById('scanner-overlay').style.display='none';
 }
 
